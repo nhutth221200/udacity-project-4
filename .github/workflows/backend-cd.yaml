@@ -1,0 +1,88 @@
+name: BackendCD
+on:
+  workflow_dispatch:
+
+  # Automatic trigger on push events to the main branch
+  push:
+    branches:
+      - main
+
+  # Scheduled trigger at 5:00 AM UTC, Monday through Friday
+  schedule:
+    - cron: '0 5 * * 1-5'
+  
+env:
+  # Set Node.js Version
+  NODE_VERSION: '18.x'
+
+jobs:
+  install-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Node.js 
+        uses: actions/setup-node@v3
+        with:
+          node-version: latest
+      - name: Restore cache
+        uses: actions/cache@v2
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+      - name: Install dependencies
+        run:
+          cd ./starter/backend &&
+          python -m pip install --upgrade pip &&
+          pip install pipenv && 
+          pipenv install pytest --dev && 
+          pipenv install --dev
+      - name: Run test
+        run: cd ./starter/backend && pipenv run test
+
+  deploy-job:
+    needs: install-job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Node.js 
+        uses: actions/setup-node@v3
+        with:
+          node-version: latest  
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{secrets.AWS_SESSION_TOKEN}}
+          aws-region: us-east-1
+      - name: ECR Login
+        uses: aws-actions/amazon-ecr-login@v1
+        with:
+          access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          region: us-east-1
+      - name: Build Docker image
+        run: |
+          cd ./starter/backend
+          docker build -t backend:${GITHUB_SHA} .
+      # 3.b.ii Tag the built docker image
+      - name: Tag Docker Image
+        run:
+          cd ./starter/backend && 
+          docker tag backend:${GITHUB_SHA} ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend:${GITHUB_SHA}
+      # 3.c.i Push the image to ERC
+      - name: Push Docker image to ECR
+        run:
+          cd ./starter/backend && 
+          docker push ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend:${GITHUB_SHA}
+      - name: Kubeconfig Login
+        run:
+          aws eks update-kubeconfig --name project4 --region us-east-1
+      # 3.c.ii Apply the Kubernets manfiests using the image tag above
+      - name: Deploy to Kubernetes
+        run:
+          cd ./starter/backend/k8s &&
+          kustomize edit set image backend=${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/backend:${GITHUB_SHA} &&
+          kustomize build | kubectl apply -f -

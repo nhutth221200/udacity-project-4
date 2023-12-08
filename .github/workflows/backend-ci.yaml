@@ -1,0 +1,84 @@
+# Workflow name
+name: BackendCI
+
+# Triggers for the workflow
+on:
+  # Manual trigger using the workflow_dispatch event
+  workflow_dispatch:
+      
+  # Automatic trigger on pull request events targeting the main branch
+  pull_request:
+    branches:
+      - main
+      
+  # Scheduled trigger at 5:00 AM UTC, Monday through Friday
+  schedule:
+    - cron: '0 5 * * 1-5'
+
+# Jobs defined in the workflow
+jobs:
+  lint-job:
+    name: LintJob
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Node.js 
+        uses: actions/setup-node@v3
+        with:
+          node-version: latest
+      - name: Restore cache
+        uses: actions/cache@v2
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+      - name: Install dependencies
+        run: 
+          cd ./starter/backend && 
+          python -m pip install --upgrade pip && 
+          pip install pipenv && 
+          pipenv install --dev
+      - name: Run lint
+        run: cd ./starter/backend && pipenv run lint
+
+  test-job:
+    name: TestJob
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Node.js 
+        uses: actions/setup-node@v3
+        with:
+          node-version: latest
+      - name: Restore cache
+        uses: actions/cache@v2
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+      - name: Install dependencies
+        run:
+          cd ./starter/backend &&
+          python -m pip install --upgrade pip &&
+          pip install pipenv && 
+          pipenv install pytest --dev && 
+          pipenv install --dev
+      - name: Run test
+        run: cd ./starter/backend && pipenv run test
+
+  build-job:
+    name: BuildJob
+    needs: [lint-job, test-job]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: test-results.xml
+      - name: Check out code
+        uses: actions/checkout@v3
+      - name: Build Docker Image
+        run: |
+          cd ./starter/backend
+          docker build -t backend .
